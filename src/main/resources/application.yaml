@@ -1,0 +1,22 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: api-gateway
+  main:
+    web-application-type: reactive  # ⬅️ OBRIGATÓRIO para Gateway
+
+# Eureka
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    fetch-registry: true
+    register-with-eureka: true
+
+# JWT (igual ao user-service)
+api:
+  security:
+    token:
+      secret: my-very-strong-secret-key-of-32-characters
