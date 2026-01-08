@@ -38,17 +38,17 @@ public class GatewayConfig {
                         .filters(f -> f.filter(filter))
                         .uri("lb://user-service"))
 
-                // Rota para books (protegida)
-                .route("book-service", r -> r
-                        .path("/api/books/**")
+                // Rota para vatalog (protegida)
+                .route("catalog-service", r -> r
+                        .path("/books/**")
                         .filters(f -> f.filter(filter))
-                        .uri("lb://book-service"))  // Nome do seu book service
+                        .uri("lb://catalog-service"))
 
                 // Rota para reviews (protegida)
                 .route("review-service", r -> r
-                        .path("/api/reviews/**")
+                        .path("/review/**")
                         .filters(f -> f.filter(filter))
-                        .uri("lb://review-service"))  // Nome do seu review service
+                        .uri("lb://review-service"))
 
                 .build();
     }

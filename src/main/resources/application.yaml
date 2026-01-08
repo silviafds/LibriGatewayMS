@@ -16,7 +16,5 @@ eureka:
     register-with-eureka: true
 
 # JWT (igual ao user-service)
-api:
-  security:
-    token:
-      secret: my-very-strong-secret-key-of-32-characters
+jwt:
+  secret: my-very-strong-secret-key-of-32-characters
