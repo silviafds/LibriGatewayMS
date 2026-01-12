@@ -1,5 +1,7 @@
 package com.libriGateway.infra;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
@@ -8,6 +10,8 @@ import org.apache.hc.core5.util.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
@@ -87,23 +91,81 @@ public class AuthenticationFilter implements GatewayFilter {
                                                GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
 
-        // Verifica header Authorization
+        // Tenta obter o token do header primeiro
         List<String> authHeaders = request.getHeaders().get("Authorization");
+        String token = null;
 
-        if (authHeaders == null || authHeaders.isEmpty()) {
-            System.out.println("Missing Authorization header");
+        if (authHeaders != null && !authHeaders.isEmpty()) {
+            String authHeader = authHeaders.get(0);
+
+            if (authHeader.startsWith("Bearer ")) {
+                token = authHeader.substring(7).trim();
+            } else {
+                token = authHeader.trim(); // Se não começa com "Bearer ", assume que é token puro no header
+            }
+        }
+
+        // Se não encontrou no header, tenta extrair do body (para POST/PUT)
+        if (token == null && (HttpMethod.POST.equals(request.getMethod()) ||
+                HttpMethod.PUT.equals(request.getMethod()))) {
+            return extractTokenFromBody(exchange, chain);
+        } else if (token == null) {
+            System.out.println("Missing Authorization header or token");
             return onError(exchange, HttpStatus.UNAUTHORIZED, "Token não fornecido");
         }
 
-        String authHeader = authHeaders.get(0);
+        return validateTokenAndContinue(token, exchange, chain);
+    }
 
-        if (!authHeader.startsWith("Bearer ")) {
-            System.out.println("Invalid Authorization format");
-            return onError(exchange, HttpStatus.UNAUTHORIZED, "Formato de token inválido");
-        }
+    private Mono<Void> extractTokenFromBody(ServerWebExchange exchange,
+                                            GatewayFilterChain chain) {
+        // CachedBodyServerHttpRequestWrapper é necessário para ler o body múltiplas vezes
+        return DataBufferUtils.join(exchange.getRequest().getBody())
+                .flatMap(dataBuffer -> {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
 
-        String token = authHeader.substring(7).trim();
+                    String body = new String(bytes, StandardCharsets.UTF_8);
 
+                    try {
+                        // Tenta extrair token do JSON body
+                        ObjectMapper mapper = new ObjectMapper();
+                        JsonNode jsonNode = mapper.readTree(body);
+
+                        String token = null;
+
+                        // Procura por campos comuns que podem conter o token
+                        if (jsonNode.has("token")) {
+                            token = jsonNode.get("token").asText();
+                        } else if (jsonNode.has("accessToken")) {
+                            token = jsonNode.get("accessToken").asText();
+                        } else if (jsonNode.has("authorization")) {
+                            token = jsonNode.get("authorization").asText();
+                        }
+
+                        if (token != null && !token.isEmpty()) {
+                            // Remove "Bearer " se presente
+                            if (token.startsWith("Bearer ")) {
+                                token = token.substring(7).trim();
+                            }
+
+                            // Valida o token
+                            return validateTokenAndContinue(token, exchange, chain);
+                        } else {
+                            return onError(exchange, HttpStatus.UNAUTHORIZED,
+                                    "Token não encontrado no corpo da requisição");
+                        }
+                    } catch (Exception e) {
+                        return onError(exchange, HttpStatus.BAD_REQUEST,
+                                "Erro ao processar corpo da requisição: " + e.getMessage());
+                    }
+                });
+    }
+
+    private Mono<Void> validateTokenAndContinue(String token,
+                                                ServerWebExchange exchange,
+                                                GatewayFilterChain chain) {
         // 1. Valida se token é válido (não expirado)
         if (jwtUtil.isInvalid(token)) {
             System.out.println("Invalid token (expired or malformed)");
@@ -117,8 +179,14 @@ public class AuthenticationFilter implements GatewayFilter {
                 return onError(exchange, HttpStatus.UNAUTHORIZED, "Token invalidado via logout");
             }
 
-            System.out.println("Token validated successfully");
-            return chain.filter(exchange);
+            System.out.println("Token validated successfully: " + token);
+
+            // Adiciona o token como header para o microservice downstream
+            ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
+                    .header("Authorization", "Bearer " + token)
+                    .build();
+
+            return chain.filter(exchange.mutate().request(mutatedRequest).build());
         });
     }
 
