@@ -2,6 +2,8 @@ package com.libriGateway.infra;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
@@ -34,12 +36,16 @@ public class AuthenticationFilter implements GatewayFilter {
     private final RouterValidator routerValidator;
     private final JwtUtil jwtUtil;
     private final RestTemplate restTemplate;
+    private final CircuitBreaker circuitBreaker;
 
     @Autowired
-    public AuthenticationFilter(RouterValidator routerValidator, JwtUtil jwtUtil) {
+    public AuthenticationFilter(RouterValidator routerValidator, JwtUtil jwtUtil, CircuitBreakerRegistry circuitBreakerRegistry) {
         this.routerValidator = routerValidator;
         this.jwtUtil = jwtUtil;
         this.restTemplate = createRestTemplate();
+
+        this.circuitBreaker = circuitBreakerRegistry
+                .circuitBreaker("userServiceTokenValidation");
     }
 
     private RestTemplate createRestTemplate() {
@@ -193,19 +199,23 @@ public class AuthenticationFilter implements GatewayFilter {
     private Mono<Boolean> checkTokenBlacklist(String token) {
         return Mono.fromCallable(() -> {
             try {
-                System.out.println("🔍 Calling user-service with RestTemplate");
+                // Usando Circuit Breaker
+                Boolean result = circuitBreaker.executeSupplier(() -> {
+                    String url = "http://user-service/auth/validate-token?token=" +
+                            URLEncoder.encode(token, StandardCharsets.UTF_8);
 
-                String url = "http://localhost:8082/auth/validate-token?token=" +
-                        URLEncoder.encode(token, StandardCharsets.UTF_8);
+                    ResponseEntity<Boolean> response = restTemplate.getForEntity(
+                            url, Boolean.class);
 
-                ResponseEntity<Boolean> response = restTemplate.getForEntity(
-                        url, Boolean.class);
+                    if (!response.getStatusCode().is2xxSuccessful()) {
+                        throw new RuntimeException("Serviço retornou erro: " +
+                                response.getStatusCode());
+                    }
 
-                System.out.println("✅ RestTemplate response: " + response.getStatusCode());
-                System.out.println("✅ Body: " + response.getBody());
+                    return Boolean.TRUE.equals(response.getBody()) ? false : true;
+                });
 
-                return Boolean.TRUE.equals(response.getBody()) ? false : true;
-                // true = está na blacklist, false = não está
+                return result;
 
             } catch (Exception e) {
                 System.out.println("❌ RestTemplate error: " + e.getClass().getName());
