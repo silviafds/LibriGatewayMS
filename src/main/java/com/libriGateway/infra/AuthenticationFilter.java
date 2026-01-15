@@ -199,7 +199,7 @@ public class AuthenticationFilter implements GatewayFilter {
     private Mono<Boolean> checkTokenBlacklist(String token) {
         return Mono.fromCallable(() -> {
             try {
-                // Usando Circuit Breaker
+                // Using Circuit Breaker
                 Boolean result = circuitBreaker.executeSupplier(() -> {
                     String url = "http://user-service/auth/validate-token?token=" +
                             URLEncoder.encode(token, StandardCharsets.UTF_8);
@@ -220,7 +220,7 @@ public class AuthenticationFilter implements GatewayFilter {
             } catch (Exception e) {
                 System.out.println("❌ RestTemplate error: " + e.getClass().getName());
                 System.out.println("Error: " + e.getMessage());
-                return false; // Não bloqueia em caso de erro
+                return false; // Not block in error cause
             }
         }).subscribeOn(Schedulers.boundedElastic()); // Executa em thread separada
     }

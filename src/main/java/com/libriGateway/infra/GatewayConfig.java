@@ -38,7 +38,7 @@ public class GatewayConfig {
                         .filters(f -> f.filter(filter))
                         .uri("lb://user-service"))
 
-                // Rota para vatalog (protegida)
+                // Rota para catalog (protegida)
                 .route("catalog-service", r -> r
                         .path("/books/**")
                         .filters(f -> f.filter(filter))
