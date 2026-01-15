@@ -4,19 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import org.apache.hc.client5.http.config.RequestConfig;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
-import org.apache.hc.core5.util.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
@@ -24,7 +19,6 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -39,41 +33,21 @@ public class AuthenticationFilter implements GatewayFilter {
     private final CircuitBreaker circuitBreaker;
 
     @Autowired
-    public AuthenticationFilter(RouterValidator routerValidator, JwtUtil jwtUtil, CircuitBreakerRegistry circuitBreakerRegistry) {
+    public AuthenticationFilter(
+            RouterValidator routerValidator,
+            JwtUtil jwtUtil,
+            CircuitBreakerRegistry circuitBreakerRegistry,
+            @LoadBalanced RestTemplate restTemplate) { // Injeta o RestTemplate configurado
+
         this.routerValidator = routerValidator;
         this.jwtUtil = jwtUtil;
-        this.restTemplate = createRestTemplate();
-
+        this.restTemplate = restTemplate; // Usa o injetado
         this.circuitBreaker = circuitBreakerRegistry
                 .circuitBreaker("userServiceTokenValidation");
+
+        System.out.println("✅ AuthenticationFilter inicializado com RestTemplate com LoadBalancer");
     }
 
-    private RestTemplate createRestTemplate() {
-        // Configuração do PoolingHttpClientConnectionManager
-        PoolingHttpClientConnectionManager connectionManager =
-                new PoolingHttpClientConnectionManager();
-        connectionManager.setMaxTotal(100);
-        connectionManager.setDefaultMaxPerRoute(20);
-
-        // Configuração de timeout
-        RequestConfig requestConfig = RequestConfig.custom()
-                .setConnectTimeout(Timeout.ofSeconds(3))
-                .setResponseTimeout(Timeout.ofSeconds(3))
-                .setConnectionRequestTimeout(Timeout.ofSeconds(3))
-                .build();
-
-        // Cria HttpClient
-        CloseableHttpClient httpClient = HttpClients.custom()
-                .setConnectionManager(connectionManager)
-                .setDefaultRequestConfig(requestConfig)
-                .build();
-
-        // Cria RestTemplate
-        HttpComponentsClientHttpRequestFactory factory =
-                new HttpComponentsClientHttpRequestFactory(httpClient);
-
-        return new RestTemplate(factory);
-    }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
@@ -174,18 +148,23 @@ public class AuthenticationFilter implements GatewayFilter {
                                                 GatewayFilterChain chain) {
         // 1. Valida se token é válido (não expirado)
         if (jwtUtil.isInvalid(token)) {
-            System.out.println("Invalid token (expired or malformed)");
+            System.out.println("❌ Invalid token (expired or malformed)");
             return onError(exchange, HttpStatus.FORBIDDEN, "Token inválido ou expirado");
         }
 
+        System.out.println("✅ Token JWT válido localmente");
+
         // 2. Verifica se token está na blacklist (logout)
-        return checkTokenBlacklist(token).flatMap(isBlacklisted -> {
-            if (isBlacklisted) {
-                System.out.println("Token is blacklisted (user logged out)");
-                return onError(exchange, HttpStatus.UNAUTHORIZED, "Token invalidado via logout");
+        return checkTokenBlacklist(token).flatMap(shouldBlock -> {
+            if (shouldBlock) {
+                System.out.println("❌ Token bloqueado - Razão: " +
+                        (shouldBlock ? "Blacklist ou serviço indisponível" : "Desconhecido"));
+                return onError(exchange, HttpStatus.UNAUTHORIZED,
+                        "Token invalidado ou serviço de autenticação indisponível");
             }
 
-            System.out.println("Token validated successfully: " + token);
+            System.out.println("✅ Token validado com sucesso (não está na blacklist)");
+            System.out.println("Token: " + token);
 
             // Adiciona o token como header para o microservice downstream
             ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
@@ -201,8 +180,11 @@ public class AuthenticationFilter implements GatewayFilter {
             try {
                 // Using Circuit Breaker
                 Boolean result = circuitBreaker.executeSupplier(() -> {
+                    // URL com service discovery (não precisa de IP)
                     String url = "http://user-service/auth/validate-token?token=" +
                             URLEncoder.encode(token, StandardCharsets.UTF_8);
+
+                    System.out.println("🔍 Chamando user-service via LoadBalancer: " + url);
 
                     ResponseEntity<Boolean> response = restTemplate.getForEntity(
                             url, Boolean.class);
@@ -212,17 +194,23 @@ public class AuthenticationFilter implements GatewayFilter {
                                 response.getStatusCode());
                     }
 
-                    return Boolean.TRUE.equals(response.getBody()) ? false : true;
+                    // IMPORTANTE: Invertemos a lógica aqui
+                    // API retorna TRUE se token é válido, FALSE se está na blacklist
+                    // Nós queremos retornar TRUE se deve BLOQUEAR
+                    Boolean apiResponse = response.getBody();
+                    System.out.println("✅ Resposta do user-service: " + apiResponse);
+                    return Boolean.FALSE.equals(apiResponse); // TRUE = bloquear
                 });
 
                 return result;
 
             } catch (Exception e) {
-                System.out.println("❌ RestTemplate error: " + e.getClass().getName());
-                System.out.println("Error: " + e.getMessage());
-                return false; // Not block in error cause
+                System.out.println("❌ Erro ao validar token no user-service: " + e.getClass().getSimpleName());
+                System.out.println("Mensagem: " + e.getMessage());
+                System.out.println("⚠️  Serviço de autenticação indisponível - BLOQUEANDO requisição");
+                return true; // BLOQUEIA em caso de erro
             }
-        }).subscribeOn(Schedulers.boundedElastic()); // Executa em thread separada
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private Mono<Void> onError(ServerWebExchange exchange, HttpStatus status, String message) {
