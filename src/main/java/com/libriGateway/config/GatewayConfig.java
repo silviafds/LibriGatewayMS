@@ -1,5 +1,6 @@
-package com.libriGateway.infra;
+package com.libriGateway.config;
 
+import com.libriGateway.filter.AuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;

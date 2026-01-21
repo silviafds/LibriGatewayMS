@@ -1,4 +1,4 @@
-package com.libriGateway.infra;
+package com.libriGateway.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;

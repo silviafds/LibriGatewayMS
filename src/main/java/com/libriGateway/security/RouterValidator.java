@@ -1,4 +1,4 @@
-package com.libriGateway.infra;
+package com.libriGateway.security;
 
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
