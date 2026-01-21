@@ -3,11 +3,11 @@ server:
 
 spring:
   application:
-    name: api-gateway
+    name: api-gateway # Nome da aplicação no ecossistema Spring Cloud
   main:
-    web-application-type: reactive  # ⬅️ OBRIGATÓRIO para Gateway
+    web-application-type: reactive  # ⬅️ OBRIGATÓRIO para Gateway. Iniciar a aplicação como reativa (WebFlux).
   cloud:
-    loadbalancer:
+    loadbalancer: # Ativa retry integrado ao LoadBalancer do Spring Cloud.
       retry:
         enabled: true
       gateway:
@@ -20,8 +20,8 @@ eureka:
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/
-    fetch-registry: true
-    register-with-eureka: true
+    fetch-registry: true # Descobre serviços disponíveis
+    register-with-eureka: true # O Gateway se registra no Eureka
 
 # JWT (igual ao user-service)
 jwt:
@@ -32,20 +32,20 @@ resilience4j:
   circuitbreaker:
     configs:
       default:
-        slidingWindowSize: 10
-        failureRateThreshold: 50
-        waitDurationInOpenState: 10s
-        permittedNumberOfCallsInHalfOpenState: 3
-        automaticTransitionFromOpenToHalfOpenEnabled: true
-        recordExceptions:
+        slidingWindowSize: 10 # Analisa as últimas 10 chamadas
+        failureRateThreshold: 50 # Se 50% falharem, o circuito abre
+        waitDurationInOpenState: 10s # Tempo que o circuito fica aberto
+        permittedNumberOfCallsInHalfOpenState: 3 # Testa o serviço com 3 chamadas e decide se fecha ou abre novamente
+        automaticTransitionFromOpenToHalfOpenEnabled: true # Não precisa intervenção manual
+        recordExceptions: # contam como falha
           - org.springframework.web.client.ResourceAccessException
           - java.io.IOException
           - java.util.concurrent.TimeoutException
           - org.springframework.web.client.HttpServerErrorException
-        ignoreExceptions:
+        ignoreExceptions: # Erros 4xx não quebram o circuito
           - org.springframework.web.client.HttpClientErrorException
     instances:
-      userServiceTokenValidation:
+      userServiceTokenValidation: # Circuit breaker personalizado para user-service
         baseConfig: default
         failureRateThreshold: 60
         waitDurationInOpenState: 15s

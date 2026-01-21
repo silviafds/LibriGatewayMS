@@ -11,32 +11,47 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
+/**
+ * RestTemplate configuration for inter-service communication.
+ *
+ * This configuration provides a load-balanced RestTemplate
+ * with connection pooling and timeout settings, allowing
+ * the API Gateway to communicate with downstream services
+ * using service discovery (Eureka / LoadBalancer).
+ */
 @Configuration
 public class RestTemplateConfig {
 
+    /**
+     * Creates a load-balanced RestTemplate with connection pooling
+     * and timeout configuration.
+     *
+     * @return configured RestTemplate instance
+     */
     @Bean
-    @LoadBalanced  // Esta anotação habilita o Service Discovery
+    @LoadBalanced
     public RestTemplate loadBalancedRestTemplate() {
-        // Configuração do PoolingHttpClientConnectionManager
+
+        // Manages and reuses HTTP connections
         PoolingHttpClientConnectionManager connectionManager =
                 new PoolingHttpClientConnectionManager();
         connectionManager.setMaxTotal(100);
         connectionManager.setDefaultMaxPerRoute(20);
 
-        // Configuração de timeout
+        // Defines HTTP timeout settings
         RequestConfig requestConfig = RequestConfig.custom()
                 .setConnectTimeout(Timeout.ofSeconds(3))
                 .setResponseTimeout(Timeout.ofSeconds(3))
                 .setConnectionRequestTimeout(Timeout.ofSeconds(3))
                 .build();
 
-        // Cria HttpClient
+        // Builds the HTTP client with pooling and timeouts
         CloseableHttpClient httpClient = HttpClients.custom()
                 .setConnectionManager(connectionManager)
                 .setDefaultRequestConfig(requestConfig)
                 .build();
 
-        // Cria RestTemplate
+        // Integrates HttpClient with RestTemplate
         HttpComponentsClientHttpRequestFactory factory =
                 new HttpComponentsClientHttpRequestFactory(httpClient);
 
